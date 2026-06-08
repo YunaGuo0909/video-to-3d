@@ -20,9 +20,8 @@
 #   --max-frames  N                         (cap on extracted frames, default: 300)
 #
 # Requirements:
-#   uv sync                   (core dependencies)
-#   uv sync --extra depth     (optional: depth prior)
-#   uv sync --extra semantic  (optional: LangSplat)
+#   Activate the project venv before running:
+#     source /transfer/vt3/.venv/bin/activate
 
 set -euo pipefail
 
@@ -65,12 +64,13 @@ echo "  Video     : $VIDEO"
 echo "  Output    : $OUTPUT"
 echo "  Backend   : $BACKEND"
 echo "  Mode      : $MODE"
+echo "  Python    : $(python --version)"
 echo "============================================================"
 
 # ── Step 1: Frame extraction ──────────────────────────────────────────────────
 echo ""
 echo "[1/4] Extracting frames..."
-uv run python - <<EOF
+python - <<EOF
 from pathlib import Path
 from src.data.video_processor import VideoProcessor
 
@@ -82,7 +82,7 @@ EOF
 # ── Step 2: Pose estimation ───────────────────────────────────────────────────
 echo ""
 echo "[2/4] Estimating camera poses (backend: $BACKEND)..."
-uv run python - <<EOF
+python - <<EOF
 from pathlib import Path
 from src.data.pose_estimator import PoseEstimator, PoseBackend
 from src.data.dataset_builder import DatasetBuilder
@@ -104,7 +104,7 @@ EOF
 if [[ "$USE_DEPTH" == "true" ]]; then
     echo ""
     echo "[3a/4] Predicting depth maps (Depth Anything V2)..."
-    uv run python - <<EOF
+    python - <<EOF
 from pathlib import Path
 from src.models.depth_prior import DepthPrior
 from src.data.dataset_builder import DatasetBuilder
@@ -128,7 +128,7 @@ else
     MAX_ITERS=30000
 fi
 
-uv run python - <<EOF
+python - <<EOF
 from pathlib import Path
 from src.models.gaussian_trainer import GaussianTrainer, TrainingConfig
 
@@ -141,7 +141,6 @@ trainer = GaussianTrainer(cfg)
 exp_dir = trainer.train(Path("$OUTPUT"))
 ply_path = trainer.export_ply(exp_dir)
 print(f"PLY exported: {ply_path}")
-# Save ply path for subsequent steps.
 (Path("$OUTPUT") / ".ply_path").write_text(str(ply_path))
 EOF
 
@@ -151,7 +150,7 @@ if [[ "$USE_SEMANTIC" == "true" ]]; then
     echo "[4/4] Building LangSplat semantic field..."
     PLY_PATH=$(cat "$OUTPUT/.ply_path")
 
-    uv run python - <<EOF
+    python - <<EOF
 from pathlib import Path
 from src.models.semantic_field import SemanticField
 

@@ -220,20 +220,59 @@ class PoseEstimator:
             len(best.points3D),
         )
 
-        # ── Step 4: Convert to nerfstudio format ──────────────────────────────
+        # ── Step 4: Export sparse point cloud PLY ────────────────────────────
+        # nerfstudio uses this for Gaussian initialisation. Without it the
+        # dataparser shows an interactive prompt that breaks non-TTY runs.
+        ply_path = output_dir / "sparse_pt_cloud.ply"
+        self._export_sparse_ply(best, ply_path)
+
+        # ── Step 5: Convert to nerfstudio format ──────────────────────────────
         transforms_path = output_dir / "transforms.json"
         self._convert_colmap_reconstruction_to_nerfstudio(
-            best, images_dir, transforms_path
+            best, images_dir, transforms_path, ply_file_path="sparse_pt_cloud.ply"
         )
 
         logger.info("transforms.json written to %s", transforms_path)
         return transforms_path
+
+    @staticmethod
+    def _export_sparse_ply(reconstruction, ply_path: Path) -> None:
+        """Write sparse 3D points from pycolmap Reconstruction to a PLY file.
+
+        nerfstudio reads this file to initialise Gaussian positions, which
+        produces much better results than a random sphere initialisation.
+        """
+        try:
+            from plyfile import PlyData, PlyElement
+        except ImportError:
+            logger.warning("plyfile not installed — skipping PLY export.")
+            return
+
+        pts = reconstruction.points3D
+        if not pts:
+            logger.warning("Reconstruction has no 3D points — skipping PLY export.")
+            return
+
+        xyz = np.array([p.xyz for p in pts.values()], dtype=np.float32)
+        rgb = np.array([p.color[:3] for p in pts.values()], dtype=np.uint8)
+
+        vertices = np.empty(
+            len(xyz),
+            dtype=[("x","f4"),("y","f4"),("z","f4"),
+                   ("red","u1"),("green","u1"),("blue","u1")],
+        )
+        vertices["x"], vertices["y"], vertices["z"] = xyz[:,0], xyz[:,1], xyz[:,2]
+        vertices["red"], vertices["green"], vertices["blue"] = rgb[:,0], rgb[:,1], rgb[:,2]
+
+        PlyData([PlyElement.describe(vertices, "vertex")]).write(str(ply_path))
+        logger.info("Sparse PLY exported: %d points → %s", len(xyz), ply_path)
 
     def _convert_colmap_reconstruction_to_nerfstudio(
         self,
         reconstruction,
         images_dir: Path,
         transforms_path: Path,
+        ply_file_path: str | None = None,
     ) -> None:
         """Convert a pycolmap Reconstruction to nerfstudio transforms.json.
 
@@ -286,6 +325,8 @@ class PoseEstimator:
             "h": int(first_cam.height),
             "frames": frames,
         }
+        if ply_file_path:
+            transforms["ply_file_path"] = ply_file_path
 
         with open(transforms_path, "w") as f:
             json.dump(transforms, f, indent=2)

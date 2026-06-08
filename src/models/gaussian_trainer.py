@@ -149,9 +149,6 @@ class GaussianTrainer:
             "--experiment-name", cfg.experiment_name,
             "--max-num-iterations", str(cfg.max_num_iterations),
             "nerfstudio-data",             # data parser sub-command
-            # Disable interactive PLY-conversion prompt when sparse_pt_cloud.ply
-            # is absent. Gaussians fall back to sphere initialisation.
-            "--pipeline.datamanager.dataparser.load-3d-points", "False",
         ]
 
         if cfg.use_depth_prior:

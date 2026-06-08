@@ -148,7 +148,6 @@ class GaussianTrainer:
             "--output-dir", str(cfg.output_dir),
             "--experiment-name", cfg.experiment_name,
             "--max-num-iterations", str(cfg.max_num_iterations),
-            "--viewer.enabled", "False",   # headless on remote GPU
             "nerfstudio-data",             # data parser sub-command
         ]
 

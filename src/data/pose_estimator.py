@@ -246,19 +246,7 @@ class PoseEstimator:
         for _img_id, image in reconstruction.images.items():
             cam = reconstruction.cameras[image.camera_id]
 
-            # Build 4x4 world-to-camera matrix from pycolmap Rigid3d.
-            # cam_from_world is the w2c transform stored as Rigid3d.
-            try:
-                # pycolmap >= 3.x API
-                R = image.cam_from_world.rotation.matrix()   # (3,3)
-                t = np.array(image.cam_from_world.translation)  # (3,)
-            except AttributeError:
-                # pycolmap < 3.x fallback (qvec / tvec)
-                from scipy.spatial.transform import Rotation
-                R = Rotation.from_quat(
-                    [image.qvec[1], image.qvec[2], image.qvec[3], image.qvec[0]]
-                ).as_matrix()
-                t = np.array(image.tvec)
+            R, t = self._extract_w2c(image)
 
             w2c = np.eye(4, dtype=np.float64)
             w2c[:3, :3] = R
@@ -301,6 +289,52 @@ class PoseEstimator:
 
         with open(transforms_path, "w") as f:
             json.dump(transforms, f, indent=2)
+
+    @staticmethod
+    def _extract_w2c(image) -> tuple[np.ndarray, np.ndarray]:
+        """Extract (R, t) world-to-camera from a pycolmap Image.
+
+        Handles API differences across pycolmap versions:
+          - 4.x: cam_from_world is a callable method → call it, then access
+                 .rotation.matrix() and .translation
+          - 3.x: cam_from_world is a Rigid3d property (not callable)
+          - fallback: reconstruct from qvec/tvec (older pycolmap)
+        """
+        cfw = image.cam_from_world
+        # In pycolmap 4.x cam_from_world is a bound method — call it.
+        if callable(cfw):
+            cfw = cfw()
+
+        # Try Rigid3d with Rotation3d sub-object (.rotation.matrix())
+        try:
+            rot = cfw.rotation
+            R = np.array(rot.matrix() if callable(rot.matrix) else rot.matrix)
+            t = np.array(cfw.translation)
+            return R, t
+        except AttributeError:
+            pass
+
+        # Try Rigid3d that exposes .matrix() directly (3×4 or 4×4)
+        try:
+            mat = np.array(cfw.matrix() if callable(cfw.matrix) else cfw.matrix)
+            return mat[:3, :3], mat[:3, 3]
+        except AttributeError:
+            pass
+
+        # Oldest pycolmap: qvec + tvec stored on the Image directly
+        try:
+            from scipy.spatial.transform import Rotation
+            R = Rotation.from_quat(
+                [image.qvec[1], image.qvec[2], image.qvec[3], image.qvec[0]]
+            ).as_matrix()
+            return R, np.array(image.tvec)
+        except AttributeError:
+            pass
+
+        raise RuntimeError(
+            f"Cannot extract pose from pycolmap Image (cam_from_world type: "
+            f"{type(cfw)}). Please report your pycolmap version."
+        )
 
     @staticmethod
     def _parse_colmap_camera(cam) -> tuple[float, ...]:

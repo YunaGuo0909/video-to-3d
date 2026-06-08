@@ -1,0 +1,23 @@
+# LangSplat semantic field configuration
+# Requires: uv sync --extra semantic
+# Reference: Qin et al., CVPR 2024 — https://github.com/minghanqin/LangSplat
+
+# ── CLIP model ───────────────────────────────────────────────────────────────
+clip_model: "ViT-B/16"          # Options: ViT-B/16 | ViT-L/14 | ViT-H/14
+clip_dim: 512                   # Output feature dimension for ViT-B/16
+
+# ── Language autoencoder ─────────────────────────────────────────────────────
+# Compresses 512-d CLIP features to a lower-d code stored per Gaussian.
+autoencoder_hidden_dim: 256
+autoencoder_output_dim: 3       # 3-d bottleneck stored per Gaussian
+autoencoder_epochs: 50
+autoencoder_lr: 0.0001
+
+# ── Feature rendering ────────────────────────────────────────────────────────
+# Language features are rendered using the frozen 3DGS geometry.
+render_resolution: [800, 600]   # Must match the splatfacto training resolution.
+
+# ── Query API ────────────────────────────────────────────────────────────────
+# Cosine similarity threshold for highlighting Gaussians matching a text query.
+similarity_threshold: 0.5
+top_k_results: 1000             # Maximum number of Gaussians returned per query.

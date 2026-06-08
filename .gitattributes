@@ -1,0 +1,13 @@
+# Default: auto line ending
+* text=auto
+
+# Shell scripts must always use LF (they run on Linux)
+*.sh text eol=lf
+
+# Python files use LF
+*.py text eol=lf
+
+# Config and docs: auto
+*.yaml text=auto
+*.toml text=auto
+*.md text=auto

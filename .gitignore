@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv/
+
+# uv
+uv.lock
+
+# nerfstudio outputs (large binary artifacts)
+outputs/
+.nerfstudio/
+
+# Model weights and large data
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.ply
+*.npz
+
+# Depth and feature maps (generated at runtime)
+depth_raw/
+clip_features/
+
+# Video and image data (add your own examples manually)
+examples/input/*.mp4
+examples/input/*.mov
+examples/input/*.avi
+examples/output/*.mp4
+examples/output/*.ply
+
+# Planning and internal documents — not for public repo
+*.md
+*.txt
+!README.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

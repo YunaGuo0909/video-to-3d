@@ -1,0 +1,35 @@
+# nerfstudio splatfacto training configuration
+# Two modes: "debug" for fast iteration, "quality" for final submission.
+# Usage: ns-train splatfacto --data <processed_dir> nerfstudio-data
+#        Override fields via CLI: ns-train splatfacto --max-num-iterations 30000 ...
+
+mode: quality  # "debug" | "quality"
+
+# ── Shared settings ─────────────────────────────────────────────────────────
+output_dir: outputs/
+experiment_name: room_reconstruction
+timestamp: true
+
+# ── Training iterations ──────────────────────────────────────────────────────
+# debug:   3 000 iters  (~2 min on RTX 4070)
+# quality: 30 000 iters (~20 min on RTX 4070)
+debug_max_num_iterations: 3000
+quality_max_num_iterations: 30000
+
+# ── Gaussian densification ───────────────────────────────────────────────────
+# Controls how many Gaussians are spawned and pruned during training.
+densify_grad_threshold: 0.0002
+cull_alpha_thresh: 0.005
+densify_from_iter: 500
+densify_until_iter: 15000
+densification_interval: 100
+
+# ── Camera model ─────────────────────────────────────────────────────────────
+# OPENCV handles phones with mild fisheye distortion.
+camera_optimizer:
+  mode: SO3xR3
+
+# ── Viewer ───────────────────────────────────────────────────────────────────
+# Set to false on headless training machines.
+viewer:
+  enabled: false

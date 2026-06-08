@@ -1,0 +1,58 @@
+[project]
+name = "video-to-3d"
+version = "0.1.0"
+description = "Video to 3D scene reconstruction: MASt3R-SfM + Gaussian Splatting + optional LangSplat semantics"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    # Core vision + numerics
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "Pillow>=10.0.0",
+    "scipy>=1.12.0",
+    "tqdm>=4.66.0",
+    # 3D reconstruction
+    "nerfstudio>=1.1.0",
+    "plyfile>=1.0.0",
+    # Serving
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.6.0",
+]
+
+[project.optional-dependencies]
+# Semantic extension (LangSplat): install with: uv sync --extra semantic
+semantic = [
+    "open-clip-torch>=2.24.0",
+    "transformers>=4.38.0",
+]
+# Depth prior (DN-Splatter / Depth Anything V2)
+depth = [
+    "transformers>=4.38.0",
+    "huggingface-hub>=0.21.0",
+]
+# Development tools
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+addopts = "-v --tb=short"

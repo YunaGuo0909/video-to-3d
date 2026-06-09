@@ -159,18 +159,16 @@ class PoseEstimator:
     # ── COLMAP backend (via pycolmap Python API) ──────────────────────────────
 
     def _run_colmap(self, images_dir: Path, output_dir: Path) -> Path:
-        """Run SfM with pycolmap, then delegate format conversion to nerfstudio.
-
-        We use pycolmap only for the heavy SfM steps (feature extraction,
-        matching, incremental mapping). The COLMAP→nerfstudio coordinate
-        conversion is intentionally left to nerfstudio's own ns-process-data
-        with --skip-colmap, which is the battle-tested reference implementation.
+        """Run SfM with pycolmap, convert poses from COLMAP text files.
 
         Pipeline:
           1. pycolmap: feature extraction + matching + incremental mapping
-             (saves reconstruction to colmap/sparse/<id>/ automatically)
-          2. ns-process-data images --skip-colmap: reads the saved COLMAP
-             model and writes a correct transforms.json
+          2. best.write_text() → dump cameras/images/points3D as plain text
+          3. Parse text files with standard quaternion math (no pycolmap API)
+          4. Write nerfstudio transforms.json
+
+        Using text files avoids all pycolmap version API differences.
+        The quaternion→rotation conversion uses scipy, which is deterministic.
         """
         try:
             import pycolmap
@@ -197,8 +195,6 @@ class PoseEstimator:
         pycolmap.match_exhaustive(database_path=str(database_path))
 
         # ── Step 3: Incremental mapping ───────────────────────────────────────
-        # incremental_mapping saves the reconstruction to sparse_path/<id>/
-        # in COLMAP binary format (cameras.bin, images.bin, points3D.bin).
         logger.info("Running incremental mapping...")
         maps = pycolmap.incremental_mapping(
             database_path=str(database_path),
@@ -219,31 +215,142 @@ class PoseEstimator:
             len(best.images), len(best.points3D),
         )
 
-        # ── Step 4: Convert via ns-process-data (correct coordinate handling) ─
-        # ns-process-data --skip-colmap reads the COLMAP binary model and
-        # applies nerfstudio's own coordinate conversion. This avoids any
-        # manual matrix math that could introduce subtle axis-flip bugs.
-        colmap_model_path = sparse_path / str(best_id)
-        cmd = [
-            "ns-process-data", "images",
-            "--data", str(images_dir),
-            "--output-dir", str(output_dir),
-            "--skip-colmap",
-            "--colmap-model-path", str(colmap_model_path),
-            "--num-downscales", "0",
-        ]
-        logger.info("Converting COLMAP model to nerfstudio format...")
-        self._run_subprocess(cmd)
+        # ── Step 4: Export as text (API-version-independent) ─────────────────
+        text_dir = colmap_dir / "text"
+        text_dir.mkdir(exist_ok=True)
+        best.write_text(str(text_dir))
+        logger.info("COLMAP text model written to %s", text_dir)
 
+        # ── Step 5: Export sparse PLY for Gaussian initialisation ─────────────
+        ply_path = output_dir / "sparse_pt_cloud.ply"
+        self._export_sparse_ply(best, ply_path)
+
+        # ── Step 6: Parse text files → transforms.json ───────────────────────
         transforms_path = output_dir / "transforms.json"
-        if not transforms_path.exists():
-            raise RuntimeError(
-                "ns-process-data did not produce transforms.json. "
-                "Check the output above for errors."
-            )
+        self._convert_colmap_text_to_nerfstudio(
+            text_dir, images_dir, transforms_path,
+            ply_file_path="sparse_pt_cloud.ply",
+        )
 
         logger.info("transforms.json written to %s", transforms_path)
         return transforms_path
+
+    def _convert_colmap_text_to_nerfstudio(
+        self,
+        text_dir: Path,
+        images_dir: Path,
+        transforms_path: Path,
+        ply_file_path: str | None = None,
+    ) -> None:
+        """Parse COLMAP text files and write nerfstudio transforms.json.
+
+        COLMAP images.txt stores the WORLD-TO-CAMERA pose as:
+          QW QX QY QZ TX TY TZ
+
+        Conversion to nerfstudio camera-to-world (OpenGL convention):
+          1. Build rotation matrix from quaternion (scipy, [x,y,z,w] convention)
+          2. Invert: R_wc = R_cw^T,  t_wc = -R_cw^T @ t_cw
+          3. Flip Y and Z columns: COLMAP(Y↓,Z→) → nerfstudio(Y↑,Z←)
+        """
+        from scipy.spatial.transform import Rotation
+
+        # ── Parse cameras.txt ─────────────────────────────────────────────────
+        cameras: dict[int, dict] = {}
+        with open(text_dir / "cameras.txt") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                cam_id = int(parts[0])
+                model = parts[1]
+                w, h = int(parts[2]), int(parts[3])
+                p = [float(x) for x in parts[4:]]
+                cameras[cam_id] = {
+                    "model": model, "w": w, "h": h, "params": p
+                }
+
+        # ── Parse images.txt ──────────────────────────────────────────────────
+        # Odd lines: IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME
+        # Even lines: 2D point observations (skip)
+        frames: list[dict] = []
+        with open(text_dir / "images.txt") as f:
+            lines = [l for l in f if not l.startswith("#") and l.strip()]
+
+        for i in range(0, len(lines), 2):
+            parts = lines[i].split()
+            qw, qx, qy, qz = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+            tx, ty, tz = float(parts[5]), float(parts[6]), float(parts[7])
+            cam_id = int(parts[8])
+            name = parts[9]
+
+            cam = cameras[cam_id]
+
+            # World-to-camera rotation (scipy uses [x,y,z,w] scalar-last)
+            R_cw = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
+            t_cw = np.array([tx, ty, tz])
+
+            # Camera-to-world
+            R_wc = R_cw.T
+            t_wc = -R_wc @ t_cw
+            c2w = np.eye(4, dtype=np.float64)
+            c2w[:3, :3] = R_wc
+            c2w[:3, 3] = t_wc
+
+            # COLMAP OpenCV (Y↓,Z→) → nerfstudio OpenGL (Y↑,Z←)
+            c2w[:3, 1:3] *= -1
+
+            fl_x, fl_y, cx, cy = self._intrinsics_from_params(cam["model"], cam["params"], cam["w"], cam["h"])
+
+            frames.append({
+                "file_path": f"images/{name}",
+                "transform_matrix": c2w.tolist(),
+                "fl_x": fl_x,
+                "fl_y": fl_y,
+                "cx": cx,
+                "cy": cy,
+            })
+
+        if not frames:
+            raise RuntimeError("No frames parsed from images.txt.")
+
+        # Shared intrinsics from first camera
+        first_cam = cameras[min(cameras.keys())]
+        fl_x0, fl_y0, cx0, cy0 = self._intrinsics_from_params(
+            first_cam["model"], first_cam["params"], first_cam["w"], first_cam["h"]
+        )
+
+        transforms: dict[str, Any] = {
+            "camera_model": "OPENCV",
+            "fl_x": fl_x0, "fl_y": fl_y0,
+            "cx": cx0, "cy": cy0,
+            "w": first_cam["w"], "h": first_cam["h"],
+            "frames": frames,
+        }
+        if ply_file_path:
+            transforms["ply_file_path"] = ply_file_path
+
+        with open(transforms_path, "w") as f:
+            json.dump(transforms, f, indent=2)
+
+        logger.info("Wrote %d frames to transforms.json", len(frames))
+
+    @staticmethod
+    def _intrinsics_from_params(model: str, p: list, w: int, h: int) -> tuple:
+        """Return (fl_x, fl_y, cx, cy) from COLMAP camera params."""
+        m = model.upper()
+        if "SIMPLE_PINHOLE" in m:   # f cx cy
+            return p[0], p[0], p[1], p[2]
+        if "PINHOLE" in m:          # fx fy cx cy
+            return p[0], p[1], p[2], p[3]
+        if "SIMPLE_RADIAL" in m:    # f cx cy k
+            return p[0], p[0], p[1], p[2]
+        if "RADIAL" in m:           # f cx cy k1 k2
+            return p[0], p[0], p[1], p[2]
+        if "OPENCV" in m:           # fx fy cx cy k1 k2 p1 p2
+            return p[0], p[1], p[2], p[3]
+        # Fallback: assume f cx cy
+        return p[0], p[0], w / 2.0, h / 2.0
 
     @staticmethod
     def _export_sparse_ply(reconstruction, ply_path: Path) -> None:

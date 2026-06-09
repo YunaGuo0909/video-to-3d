@@ -159,24 +159,24 @@ class PoseEstimator:
     # ── COLMAP backend (via pycolmap Python API) ──────────────────────────────
 
     def _run_colmap(self, images_dir: Path, output_dir: Path) -> Path:
-        """Run SfM using pycolmap Python bindings (no COLMAP binary needed).
+        """Run SfM with pycolmap, then delegate format conversion to nerfstudio.
 
-        pycolmap wraps the COLMAP C++ library directly. The pipeline is:
-          1. Feature extraction (SIFT)
-          2. Exhaustive feature matching
-          3. Incremental sparse reconstruction
-          4. Convert reconstruction to nerfstudio transforms.json
+        We use pycolmap only for the heavy SfM steps (feature extraction,
+        matching, incremental mapping). The COLMAP→nerfstudio coordinate
+        conversion is intentionally left to nerfstudio's own ns-process-data
+        with --skip-colmap, which is the battle-tested reference implementation.
 
-        Coordinate conversion: COLMAP uses OpenCV convention (Y down, Z fwd).
-        nerfstudio uses OpenGL convention (Y up, Z backward). We apply the
-        standard flip of Y and Z axes on the camera-to-world matrix.
+        Pipeline:
+          1. pycolmap: feature extraction + matching + incremental mapping
+             (saves reconstruction to colmap/sparse/<id>/ automatically)
+          2. ns-process-data images --skip-colmap: reads the saved COLMAP
+             model and writes a correct transforms.json
         """
         try:
             import pycolmap
         except ImportError:
             raise ImportError(
-                "pycolmap is required for COLMAP-based pose estimation. "
-                "Install with: pip install pycolmap"
+                "pycolmap is required. Install with: pip install pycolmap"
             )
 
         colmap_dir = output_dir / "colmap"
@@ -193,11 +193,12 @@ class PoseEstimator:
         )
 
         # ── Step 2: Feature matching ──────────────────────────────────────────
-        # Exhaustive matching is appropriate for small scenes (<200 frames).
         logger.info("Matching features (exhaustive)...")
         pycolmap.match_exhaustive(database_path=str(database_path))
 
-        # ── Step 3: Incremental sparse reconstruction ─────────────────────────
+        # ── Step 3: Incremental mapping ───────────────────────────────────────
+        # incremental_mapping saves the reconstruction to sparse_path/<id>/
+        # in COLMAP binary format (cameras.bin, images.bin, points3D.bin).
         logger.info("Running incremental mapping...")
         maps = pycolmap.incremental_mapping(
             database_path=str(database_path),
@@ -211,26 +212,35 @@ class PoseEstimator:
                 "Check that frames have sufficient overlap and texture."
             )
 
-        # Pick the reconstruction with the most registered images.
-        best = max(maps.values(), key=lambda m: len(m.images))
+        best_id = max(maps.keys(), key=lambda k: len(maps[k].images))
+        best = maps[best_id]
         logger.info(
-            "Reconstruction: %d cameras, %d images, %d 3D points.",
-            len(best.cameras),
-            len(best.images),
-            len(best.points3D),
+            "Best reconstruction: %d images, %d 3D points.",
+            len(best.images), len(best.points3D),
         )
 
-        # ── Step 4: Export sparse point cloud PLY ────────────────────────────
-        # nerfstudio uses this for Gaussian initialisation. Without it the
-        # dataparser shows an interactive prompt that breaks non-TTY runs.
-        ply_path = output_dir / "sparse_pt_cloud.ply"
-        self._export_sparse_ply(best, ply_path)
+        # ── Step 4: Convert via ns-process-data (correct coordinate handling) ─
+        # ns-process-data --skip-colmap reads the COLMAP binary model and
+        # applies nerfstudio's own coordinate conversion. This avoids any
+        # manual matrix math that could introduce subtle axis-flip bugs.
+        colmap_model_path = sparse_path / str(best_id)
+        cmd = [
+            "ns-process-data", "images",
+            "--data", str(images_dir),
+            "--output-dir", str(output_dir),
+            "--skip-colmap",
+            "--colmap-model-path", str(colmap_model_path),
+            "--num-downscales", "0",
+        ]
+        logger.info("Converting COLMAP model to nerfstudio format...")
+        self._run_subprocess(cmd)
 
-        # ── Step 5: Convert to nerfstudio format ──────────────────────────────
         transforms_path = output_dir / "transforms.json"
-        self._convert_colmap_reconstruction_to_nerfstudio(
-            best, images_dir, transforms_path, ply_file_path="sparse_pt_cloud.ply"
-        )
+        if not transforms_path.exists():
+            raise RuntimeError(
+                "ns-process-data did not produce transforms.json. "
+                "Check the output above for errors."
+            )
 
         logger.info("transforms.json written to %s", transforms_path)
         return transforms_path

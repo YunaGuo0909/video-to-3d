@@ -59,7 +59,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 VIDEO="${VIDEO:-${DATA_ROOT}/room.mp4}"
-OUTPUT="${OUTPUT:-${DATA_ROOT}/outputs/reconstruction}"
+# Auto-derive output dir from video stem + mode if not explicitly set.
+# e.g. room01.mp4 + quality → /transfer/vt3/outputs/room01_quality
+if [[ -z "$OUTPUT" ]]; then
+    VIDEO_STEM=$(basename "${VIDEO%.*}")
+    OUTPUT="${DATA_ROOT}/outputs/${VIDEO_STEM}_${MODE}"
+fi
 
 echo "============================================================"
 echo "  Video-to-3D Pipeline"

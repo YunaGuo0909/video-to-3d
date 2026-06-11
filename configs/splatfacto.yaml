@@ -18,7 +18,7 @@ quality_max_num_iterations: 30000
 
 # ── Gaussian densification ───────────────────────────────────────────────────
 # Controls how many Gaussians are spawned and pruned during training.
-densify_grad_thresh: 0.0001      # lowered from 0.0002 — more Gaussians in fine-detail areas
+densify_grad_thresh: 0.0002      # default — 0.0001 caused OOM on 16 GiB GPU with shared processes
 cull_alpha_thresh: 0.01          # raised from 0.005  — more aggressive floater pruning
 densify_from_iter: 500
 densify_until_iter: 20000        # extended from 15000 — longer densification for orbital captures

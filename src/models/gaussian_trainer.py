@@ -66,7 +66,7 @@ class TrainingConfig:
     experiment_name: str = "room_reconstruction"
     use_depth_prior: bool = False
     cull_alpha_thresh: float = 0.01
-    densify_grad_thresh: float = 0.0001
+    densify_grad_thresh: float = 0.0002
     densify_until_iter: int = 20_000
 
 
@@ -105,7 +105,10 @@ class GaussianTrainer:
         cmd = self._build_command(dataset_dir)
         logger.info("Starting splatfacto training:\n  %s", " ".join(cmd))
 
-        result = subprocess.run(cmd, text=True)
+        import os
+        env = os.environ.copy()
+        env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        result = subprocess.run(cmd, text=True, env=env)
         if result.returncode != 0:
             raise RuntimeError(
                 "ns-train splatfacto failed. Check the output above for details."

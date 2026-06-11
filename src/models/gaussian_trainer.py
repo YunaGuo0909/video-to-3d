@@ -17,13 +17,33 @@ Reference
 
 from __future__ import annotations
 
+import functools
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=1)
+def _probe_splatfacto_flags() -> frozenset:
+    """Return all --flag strings found in 'ns-train splatfacto --help'.
+
+    Result is cached so the subprocess runs at most once per process.
+    Falls back to an empty set if ns-train is unavailable or times out.
+    """
+    try:
+        result = subprocess.run(
+            ["ns-train", "splatfacto", "--help"],
+            capture_output=True, text=True, timeout=30,
+        )
+        return frozenset(re.findall(r"--[\w.-]+", result.stdout + result.stderr))
+    except Exception:
+        return frozenset()
+
 
 # nerfstudio splatfacto default training iterations.
 ITER_DEBUG = 3_000   # ~2 min on RTX 4070 — for fast iteration
@@ -155,10 +175,20 @@ class GaussianTrainer:
             "--max-num-iterations", str(cfg.max_num_iterations),
         ]
 
-        if cfg.use_scale_regularization:
-            cmd += ["--pipeline.model.use-scale-regularization", "True"]
+        supported = _probe_splatfacto_flags()
 
-        cmd += ["--pipeline.model.cull-alpha-thresh", str(cfg.cull_alpha_thresh)]
+        scale_flag = "--pipeline.model.use-scale-regularization"
+        if cfg.use_scale_regularization:
+            if not supported or scale_flag in supported:
+                cmd += [scale_flag, "True"]
+            else:
+                logger.warning("%s not in this nerfstudio version — skipping.", scale_flag)
+
+        cull_flag = "--pipeline.model.cull-alpha-thresh"
+        if not supported or cull_flag in supported:
+            cmd += [cull_flag, str(cfg.cull_alpha_thresh)]
+        else:
+            logger.warning("%s not in this nerfstudio version — skipping.", cull_flag)
 
         if cfg.use_depth_prior:
             cmd += ["--pipeline.model.use-depth-loss", "True"]

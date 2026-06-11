@@ -222,8 +222,8 @@ class VideoProcessor:
 
         sharpness_scores: list[float] = []
         motion_scores: list[float] = []
-        prev_gray: np.ndarray | None = None
 
+        # -- Sharpness: globally sampled across the entire video --------------
         for idx in sample_indices:
             cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
             ret, frame = cap.read()
@@ -231,10 +231,28 @@ class VideoProcessor:
                 continue
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             sharpness_scores.append(float(cv2.Laplacian(gray, cv2.CV_64F).var()))
-            if prev_gray is not None:
-                diff = float(np.mean(np.abs(gray.astype(np.float32) - prev_gray.astype(np.float32))))
-                motion_scores.append(diff)
-            prev_gray = gray
+
+        # -- Motion: consecutive-frame pairs inside 3 short local windows -----
+        # Globally-spaced samples span scene changes, not real motion speed.
+        # Local windows (start / mid / end of video) measure true frame-to-frame
+        # camera velocity without contamination from long-term content changes.
+        window_size = 10
+        window_starts = [total_frames // 8, total_frames // 2, total_frames * 6 // 8]
+        for w_start in window_starts:
+            prev_gray: np.ndarray | None = None
+            for offset in range(window_size):
+                fidx = min(w_start + offset, total_frames - 1)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, fidx)
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                if prev_gray is not None:
+                    diff = float(np.mean(np.abs(
+                        gray.astype(np.float32) - prev_gray.astype(np.float32)
+                    )))
+                    motion_scores.append(diff)
+                prev_gray = gray
 
         cap.release()
 

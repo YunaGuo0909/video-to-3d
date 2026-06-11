@@ -96,24 +96,34 @@ class PoseEstimator:
         """
         transforms_path = output_dir / "transforms.json"
 
-        # ── Step 1: COLMAP ────────────────────────────────────────────────────
+        # ── Step 1: COLMAP (with fallback on hard failure) ────────────────────
         logger.info("AUTO: running COLMAP...")
-        self._run_colmap(images_dir, output_dir)
         colmap_backup = output_dir / "transforms_colmap.json"
-        if transforms_path.exists():
-            shutil.copy2(transforms_path, colmap_backup)
+        colmap_rate = 0.0
+        try:
+            self._run_colmap(images_dir, output_dir)
+            if transforms_path.exists():
+                shutil.copy2(transforms_path, colmap_backup)
+            colmap_rate = self._registration_rate(transforms_path, images_dir)
+            logger.info("COLMAP registration rate: %.1f%%", colmap_rate * 100)
+        except Exception as exc:
+            logger.warning("COLMAP failed (%s) — will attempt MASt3R.", exc)
 
-        colmap_rate = self._registration_rate(transforms_path, images_dir)
-        logger.info("COLMAP registration rate: %.1f%%", colmap_rate * 100)
-
-        if colmap_rate >= 0.70 or self.mast3r_repo is None:
-            if colmap_rate < 0.70:
-                logger.warning(
-                    "Registration rate %.1f%% < 70%% but MASt3R repo not set "
-                    "(pass --mast3r-repo to enable fallback).",
-                    colmap_rate * 100,
-                )
+        if colmap_rate >= 0.70:
             logger.info("AUTO: using COLMAP result (rate=%.1f%%)", colmap_rate * 100)
+            return transforms_path
+
+        if self.mast3r_repo is None:
+            if colmap_rate == 0.0:
+                raise RuntimeError(
+                    "COLMAP failed and no MASt3R repo configured. "
+                    "Pass --mast3r-repo to enable automatic fallback."
+                )
+            logger.warning(
+                "Registration rate %.1f%% < 70%% but MASt3R repo not set "
+                "(pass --mast3r-repo to enable fallback).",
+                colmap_rate * 100,
+            )
             return transforms_path
 
         # ── Step 2: MASt3R fallback ───────────────────────────────────────────

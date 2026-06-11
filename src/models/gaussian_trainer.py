@@ -191,7 +191,19 @@ class GaussianTrainer:
             logger.warning("%s not in this nerfstudio version — skipping.", cull_flag)
 
         if cfg.use_depth_prior:
-            cmd += ["--pipeline.model.use-depth-loss", "True"]
+            # Depth supervision requires the dn-splatter nerfstudio plugin.
+            # Standard splatfacto does not expose a depth-loss flag.
+            # Check if the plugin method is available; warn and skip if not.
+            depth_flag = "--pipeline.model.use-depth-loss"
+            if not supported or depth_flag in supported:
+                cmd += [depth_flag, "True"]
+            else:
+                logger.warning(
+                    "Depth prior requested but %s is not available in this "
+                    "nerfstudio installation. Install dn-splatter plugin or "
+                    "use 'ns-train dn-splatter' instead. Skipping depth loss.",
+                    depth_flag,
+                )
 
         # Data parser sub-command must come last
         cmd += ["nerfstudio-data"]

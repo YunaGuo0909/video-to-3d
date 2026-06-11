@@ -31,6 +31,9 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 MIN_RECOMMENDED_FRAMES = 50
@@ -141,3 +144,54 @@ class DatasetBuilder:
             shutil.copy2(src, dest / src.name)
 
         logger.info("Attached %d depth maps to dataset.", len(depth_files))
+
+    # ── Scene analysis helpers ────────────────────────────────────────────────
+
+    def texture_score(self) -> float:
+        """Return mean Laplacian variance of a sample of images.
+
+        Acts as a proxy for scene texture richness.  Low values (< 150) indicate
+        low-texture indoor surfaces where depth prior supervision is beneficial.
+        """
+        images_dir = self.output_dir / "images"
+        if not images_dir.exists():
+            return 0.0
+
+        frames = sorted(images_dir.glob("frame_*.jpg")) + sorted(images_dir.glob("frame_*.png"))
+        if not frames:
+            return 0.0
+
+        # Sample up to 20 evenly-spaced frames for speed
+        step = max(1, len(frames) // 20)
+        sample = frames[::step][:20]
+
+        scores: list[float] = []
+        for f in sample:
+            img = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+            if img is not None:
+                scores.append(float(cv2.Laplacian(img, cv2.CV_64F).var()))
+
+        return float(np.mean(scores)) if scores else 0.0
+
+    def should_use_depth_prior(self, texture_threshold: float = 150.0) -> bool:
+        """Return True when the scene is likely to benefit from depth supervision.
+
+        Heuristic: a low texture score indicates flat / featureless surfaces
+        (white walls, uniform floors) where 3DGS tends to produce floaters
+        without geometric constraints from a depth prior.
+
+        Parameters
+        ----------
+        texture_threshold:
+            Scenes with texture_score below this value are considered low-texture.
+            Default 150.0 is tuned for typical indoor phone video at 1080p+.
+        """
+        score = self.texture_score()
+        use_depth = score < texture_threshold
+        logger.info(
+            "Texture score: %.1f  (threshold=%.1f) → depth prior %s",
+            score,
+            texture_threshold,
+            "recommended" if use_depth else "not required",
+        )
+        return use_depth

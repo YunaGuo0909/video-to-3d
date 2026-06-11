@@ -55,6 +55,8 @@ class TrainingConfig:
     output_dir: Path = field(default_factory=lambda: Path("outputs"))
     experiment_name: str = "room_reconstruction"
     use_depth_prior: bool = False
+    use_scale_regularization: bool = True   # penalise needle-shaped Gaussians
+    cull_alpha_thresh: float = 0.05         # prune near-transparent floaters
 
 
 class GaussianTrainer:
@@ -153,8 +155,12 @@ class GaussianTrainer:
             "--max-num-iterations", str(cfg.max_num_iterations),
         ]
 
+        if cfg.use_scale_regularization:
+            cmd += ["--pipeline.model.use-scale-regularization", "True"]
+
+        cmd += ["--pipeline.model.cull-alpha-thresh", str(cfg.cull_alpha_thresh)]
+
         if cfg.use_depth_prior:
-            # DN-Splatter depth supervision flag
             cmd += ["--pipeline.model.use-depth-loss", "True"]
 
         # Data parser sub-command must come last

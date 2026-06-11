@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import subprocess
 from enum import Enum
 from pathlib import Path
@@ -32,8 +33,9 @@ logger = logging.getLogger(__name__)
 
 
 class PoseBackend(str, Enum):
-    MAST3R = "mast3r"    # Recommended: ICLR 2025 SOTA
-    COLMAP = "colmap"    # Fallback: pycolmap Python API (no binary needed)
+    MAST3R = "mast3r"    # ICLR 2025 SOTA — robust to textureless surfaces
+    COLMAP = "colmap"    # Classic SfM via pycolmap Python API
+    AUTO   = "auto"      # Try COLMAP; fall back to MASt3R if registration < 70%
 
 
 class PoseEstimator:
@@ -76,10 +78,87 @@ class PoseEstimator:
 
         logger.info("Pose estimation backend: %s", self.backend.value)
 
-        if self.backend == PoseBackend.MAST3R:
+        if self.backend == PoseBackend.AUTO:
+            return self._estimate_auto(images_dir, output_dir)
+        elif self.backend == PoseBackend.MAST3R:
             return self._run_mast3r(images_dir, output_dir)
         else:
             return self._run_colmap(images_dir, output_dir)
+
+    # ── AUTO backend ──────────────────────────────────────────────────────────
+
+    def _estimate_auto(self, images_dir: Path, output_dir: Path) -> Path:
+        """Run COLMAP; if registration rate < 70 %, also try MASt3R and keep
+        whichever result registered more frames.
+
+        Both intermediate transforms files are preserved as
+        ``transforms_colmap.json`` / ``transforms_mast3r.json`` for debugging.
+        """
+        transforms_path = output_dir / "transforms.json"
+
+        # ── Step 1: COLMAP ────────────────────────────────────────────────────
+        logger.info("AUTO: running COLMAP...")
+        self._run_colmap(images_dir, output_dir)
+        colmap_backup = output_dir / "transforms_colmap.json"
+        if transforms_path.exists():
+            shutil.copy2(transforms_path, colmap_backup)
+
+        colmap_rate = self._registration_rate(transforms_path, images_dir)
+        logger.info("COLMAP registration rate: %.1f%%", colmap_rate * 100)
+
+        if colmap_rate >= 0.70 or self.mast3r_repo is None:
+            if colmap_rate < 0.70:
+                logger.warning(
+                    "Registration rate %.1f%% < 70%% but MASt3R repo not set "
+                    "(pass --mast3r-repo to enable fallback).",
+                    colmap_rate * 100,
+                )
+            logger.info("AUTO: using COLMAP result (rate=%.1f%%)", colmap_rate * 100)
+            return transforms_path
+
+        # ── Step 2: MASt3R fallback ───────────────────────────────────────────
+        logger.info(
+            "AUTO: COLMAP rate %.1f%% < 70%% — trying MASt3R...", colmap_rate * 100
+        )
+        mast3r_backup = output_dir / "transforms_mast3r.json"
+        try:
+            self._run_mast3r(images_dir, output_dir)
+            if transforms_path.exists():
+                shutil.copy2(transforms_path, mast3r_backup)
+            mast3r_rate = self._registration_rate(transforms_path, images_dir)
+            logger.info("MASt3R registration rate: %.1f%%", mast3r_rate * 100)
+        except Exception as exc:
+            logger.warning("MASt3R failed (%s) — keeping COLMAP result.", exc)
+            shutil.copy2(colmap_backup, transforms_path)
+            return transforms_path
+
+        # ── Pick winner ───────────────────────────────────────────────────────
+        if mast3r_rate >= colmap_rate:
+            logger.info(
+                "AUTO: MASt3R wins (%.1f%% vs COLMAP %.1f%%).",
+                mast3r_rate * 100, colmap_rate * 100,
+            )
+            shutil.copy2(mast3r_backup, transforms_path)
+        else:
+            logger.info(
+                "AUTO: COLMAP wins (%.1f%% vs MASt3R %.1f%%).",
+                colmap_rate * 100, mast3r_rate * 100,
+            )
+            shutil.copy2(colmap_backup, transforms_path)
+
+        return transforms_path
+
+    @staticmethod
+    def _registration_rate(transforms_path: Path, images_dir: Path) -> float:
+        """Return fraction of images in *images_dir* that appear in transforms.json."""
+        if not transforms_path.exists():
+            return 0.0
+        with open(transforms_path) as f:
+            data = json.load(f)
+        n_registered = len(data.get("frames", []))
+        all_images = list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.png"))
+        n_total = len(all_images)
+        return n_registered / n_total if n_total > 0 else 0.0
 
     # ── MASt3R-SfM backend ───────────────────────────────────────────────────
 

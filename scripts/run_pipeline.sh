@@ -12,14 +12,16 @@
 #       --output /transfer/vt3/outputs/my_scene
 #
 # Optional flags:
-#   --backend        mast3r | colmap           (default: colmap)
-#   --mast3r-repo    /path/to/mast3r           (required if --backend mast3r)
-#   --depth                                    (enable Depth Anything V2 prior)
+#   --backend        auto | colmap | mast3r    (default: auto — COLMAP with MASt3R fallback)
+#   --mast3r-repo    /path/to/mast3r           (required for mast3r / auto fallback)
+#   --depth                                    (force Depth Anything V2 prior)
+#   --no-depth-auto                            (disable auto depth-prior detection)
 #   --semantic                                 (build LangSplat field after training)
 #   --mode           debug | quality           (default: quality)
 #   --max-frames     N                         (cap on extracted frames, default: 300)
-#   --blur-threshold F                         (Laplacian sharpness cutoff, default: 80)
-#   --min-frame-gap  N                         (min ms between frames, default: 250)
+#   --no-adaptive                              (disable adaptive frame thresholds)
+#   --blur-threshold F                         (manual Laplacian cutoff; disables adaptive)
+#   --min-frame-gap  N                         (manual ms gap; disables adaptive)
 #
 # Requirements:
 #   Activate the project venv before running:
@@ -32,14 +34,16 @@ DATA_ROOT="/transfer/vt3"
 
 VIDEO=""
 OUTPUT=""
-BACKEND="colmap"
+BACKEND="auto"
 MAST3R_REPO=""
 USE_DEPTH=false
+USE_DEPTH_AUTO=true    # auto-detect depth prior need from texture score
 USE_SEMANTIC=false
 MODE="quality"
 MAX_FRAMES=300
 BLUR_THRESHOLD=80.0
 MIN_FRAME_GAP=250
+USE_ADAPTIVE=true      # auto-tune blur/gap thresholds from video statistics
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -49,11 +53,13 @@ while [[ $# -gt 0 ]]; do
         --backend)         BACKEND="$2";        shift 2 ;;
         --mast3r-repo)     MAST3R_REPO="$2";   shift 2 ;;
         --depth)           USE_DEPTH=true;      shift   ;;
+        --no-depth-auto)   USE_DEPTH_AUTO=false; shift  ;;
         --semantic)        USE_SEMANTIC=true;   shift   ;;
         --mode)            MODE="$2";           shift 2 ;;
         --max-frames)      MAX_FRAMES="$2";     shift 2 ;;
-        --blur-threshold)  BLUR_THRESHOLD="$2"; shift 2 ;;
-        --min-frame-gap)   MIN_FRAME_GAP="$2";  shift 2 ;;
+        --blur-threshold)  BLUR_THRESHOLD="$2"; USE_ADAPTIVE=false; shift 2 ;;
+        --min-frame-gap)   MIN_FRAME_GAP="$2";  USE_ADAPTIVE=false; shift 2 ;;
+        --no-adaptive)     USE_ADAPTIVE=false;  shift   ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -73,8 +79,10 @@ echo "  Video         : $VIDEO"
 echo "  Output        : $OUTPUT"
 echo "  Backend       : $BACKEND"
 echo "  Mode          : $MODE"
-echo "  Blur threshold: $BLUR_THRESHOLD"
-echo "  Min frame gap : ${MIN_FRAME_GAP}ms"
+echo "  Adaptive frame: $USE_ADAPTIVE"
+echo "  Blur threshold: $BLUR_THRESHOLD (ignored if adaptive)"
+echo "  Min frame gap : ${MIN_FRAME_GAP}ms (ignored if adaptive)"
+echo "  Depth auto    : $USE_DEPTH_AUTO"
 echo "  Python        : $(python --version)"
 echo "============================================================"
 
@@ -85,11 +93,15 @@ python - <<EOF
 from pathlib import Path
 from src.data.video_processor import VideoProcessor
 
-proc = VideoProcessor(
-    blur_threshold=$BLUR_THRESHOLD,
-    min_frame_gap_ms=$MIN_FRAME_GAP,
-    max_frames=$MAX_FRAMES,
-)
+use_adaptive = $([[ "$USE_ADAPTIVE" == "true" ]] && echo "True" || echo "False")
+if use_adaptive:
+    proc = VideoProcessor.from_video(Path("$VIDEO"), max_frames=$MAX_FRAMES)
+else:
+    proc = VideoProcessor(
+        blur_threshold=$BLUR_THRESHOLD,
+        min_frame_gap_ms=$MIN_FRAME_GAP,
+        max_frames=$MAX_FRAMES,
+    )
 stats = proc.process(Path("$VIDEO"), Path("$OUTPUT"))
 print(stats.summary())
 EOF
@@ -114,6 +126,26 @@ print(stats.summary())
 if not stats.is_valid:
     raise RuntimeError("Dataset validation failed — check logs above.")
 EOF
+
+# ── Step 2b: Auto-detect depth prior need ────────────────────────────────────
+if [[ "$USE_DEPTH_AUTO" == "true" && "$USE_DEPTH" == "false" ]]; then
+    echo ""
+    echo "[2b/5] Checking scene texture for depth prior decision..."
+    DEPTH_NEEDED=$(python - <<EOF
+from pathlib import Path
+from src.data.dataset_builder import DatasetBuilder
+db = DatasetBuilder(Path("$OUTPUT"))
+needed = db.should_use_depth_prior(texture_threshold=150.0)
+print("true" if needed else "false")
+EOF
+)
+    if [[ "$DEPTH_NEEDED" == "true" ]]; then
+        echo "  Low-texture scene detected — enabling depth prior automatically."
+        USE_DEPTH=true
+    else
+        echo "  Scene has sufficient texture — depth prior not required."
+    fi
+fi
 
 # ── Step 3a (optional): Depth prior ──────────────────────────────────────────
 if [[ "$USE_DEPTH" == "true" ]]; then

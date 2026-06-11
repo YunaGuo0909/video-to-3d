@@ -40,12 +40,14 @@ class ProcessingStats:
     accepted: int = 0
     rejected_blur: int = 0
     rejected_stride: int = 0
+    mean_sharpness: float = 0.0   # mean Laplacian variance of accepted frames
 
     def summary(self) -> str:
         return (
             f"Decoded {self.total_decoded} frames → "
             f"accepted {self.accepted} "
-            f"(rejected blur={self.rejected_blur}, stride={self.rejected_stride})"
+            f"(rejected blur={self.rejected_blur}, stride={self.rejected_stride}, "
+            f"mean_sharpness={self.mean_sharpness:.1f})"
         )
 
 
@@ -135,6 +137,7 @@ class VideoProcessor:
 
         stats = ProcessingStats()
         last_accepted_ms = -self.min_frame_gap_ms  # allow first frame
+        sharpness_sum = 0.0
 
         encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
 
@@ -165,6 +168,7 @@ class VideoProcessor:
                 out_path = images_dir / f"frame_{stats.accepted:06d}.{self.image_ext}"
                 cv2.imwrite(str(out_path), frame, encode_params)
                 last_accepted_ms = timestamp_ms
+                sharpness_sum += sharpness
                 stats.accepted += 1
 
                 if self.max_frames and stats.accepted >= self.max_frames:
@@ -174,6 +178,8 @@ class VideoProcessor:
                 pbar.update(1)
 
         cap.release()
+        if stats.accepted > 0:
+            stats.mean_sharpness = sharpness_sum / stats.accepted
         logger.info(stats.summary())
 
         if stats.accepted < 30:
@@ -184,3 +190,115 @@ class VideoProcessor:
             )
 
         return stats
+
+    # ── Adaptive configuration ────────────────────────────────────────────────
+
+    @staticmethod
+    def scan_video(video_path: Path | str, n_samples: int = 60) -> dict:
+        """Pre-scan a video to estimate sharpness and motion statistics.
+
+        Samples *n_samples* frames evenly across the video and computes
+        Laplacian variance (sharpness) and inter-frame mean-absolute-difference
+        (motion proxy). Results are used by ``from_video()`` to set thresholds
+        automatically.
+
+        Returns
+        -------
+        dict
+            Keys: sharpness_p10/p25/p50/p75, motion_mean, motion_std,
+            fps, total_frames.
+        """
+        video_path = Path(video_path)
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video for scanning: {video_path}")
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+
+        sample_indices = np.linspace(
+            0, total_frames - 1, min(n_samples, total_frames), dtype=int
+        )
+
+        sharpness_scores: list[float] = []
+        motion_scores: list[float] = []
+        prev_gray: np.ndarray | None = None
+
+        for idx in sample_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            sharpness_scores.append(float(cv2.Laplacian(gray, cv2.CV_64F).var()))
+            if prev_gray is not None:
+                diff = float(np.mean(np.abs(gray.astype(np.float32) - prev_gray.astype(np.float32))))
+                motion_scores.append(diff)
+            prev_gray = gray
+
+        cap.release()
+
+        sh = np.array(sharpness_scores) if sharpness_scores else np.array([100.0])
+        mo = np.array(motion_scores) if motion_scores else np.array([10.0])
+
+        return {
+            "sharpness_p10": float(np.percentile(sh, 10)),
+            "sharpness_p25": float(np.percentile(sh, 25)),
+            "sharpness_p50": float(np.percentile(sh, 50)),
+            "sharpness_p75": float(np.percentile(sh, 75)),
+            "motion_mean":   float(np.mean(mo)),
+            "motion_std":    float(np.std(mo)),
+            "fps":           fps,
+            "total_frames":  total_frames,
+        }
+
+    @classmethod
+    def from_video(
+        cls,
+        video_path: Path | str,
+        max_frames: int | None = None,
+    ) -> "VideoProcessor":
+        """Create a VideoProcessor with thresholds adapted to the input video.
+
+        Pre-scans *video_path* and sets:
+
+        - ``blur_threshold``: 25th-percentile sharpness of sampled frames —
+          accepts the top 75 % of frames by sharpness, regardless of content.
+        - ``min_frame_gap_ms``: shorter for fast-moving video (more frames
+          needed for stable triangulation), longer for slow/static captures.
+
+        Parameters
+        ----------
+        video_path:
+            Input video file.
+        max_frames:
+            Hard cap forwarded to the constructor.
+        """
+        scan = cls.scan_video(video_path)
+
+        # Keep the sharpest 75 % of frames; clamp to a safe range.
+        blur_threshold = float(np.clip(scan["sharpness_p25"], 30.0, 200.0))
+
+        # Faster motion → shorter gap to preserve sufficient parallax.
+        motion = scan["motion_mean"]
+        if motion > 15.0:
+            min_frame_gap_ms = 150.0    # fast camera: ~6-7 fps
+        elif motion > 8.0:
+            min_frame_gap_ms = 200.0    # moderate: ~5 fps
+        else:
+            min_frame_gap_ms = 300.0    # slow / tripod: ~3 fps
+
+        logger.info(
+            "Adaptive config — blur_threshold=%.1f  (p10/p25/p50=%.0f/%.0f/%.0f)  "
+            "min_frame_gap_ms=%.0f  (motion_mean=%.1f)",
+            blur_threshold,
+            scan["sharpness_p10"], scan["sharpness_p25"], scan["sharpness_p50"],
+            min_frame_gap_ms,
+            motion,
+        )
+
+        return cls(
+            blur_threshold=blur_threshold,
+            min_frame_gap_ms=min_frame_gap_ms,
+            max_frames=max_frames,
+        )

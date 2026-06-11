@@ -173,7 +173,7 @@ class GaussianTrainer:
 
     def _find_output_dir(self) -> Path:
         """Locate the most recent nerfstudio experiment directory."""
-        base = self.config.output_dir / "splatfacto" / self.config.experiment_name
+        base = self.config.output_dir / self.config.experiment_name / "splatfacto"
         if not base.exists():
             return base  # Return expected path even if not yet created
         # nerfstudio appends a timestamp sub-folder; pick the latest.

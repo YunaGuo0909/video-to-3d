@@ -163,7 +163,7 @@ class GaussianTrainer:
             "--max-num-iterations", str(cfg.max_num_iterations),
             "--pipeline.model.cull-alpha-thresh", str(cfg.cull_alpha_thresh),
             "--pipeline.model.densify-grad-thresh", str(cfg.densify_grad_thresh),
-            "--pipeline.model.densify-until-iter", str(cfg.densify_until_iter),
+            "--pipeline.model.stop-split-at", str(cfg.densify_until_iter),
         ]
 
         if cfg.use_depth_prior:

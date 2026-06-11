@@ -49,12 +49,25 @@ class TrainingConfig:
         If True, pass ``--pipeline.model.use-depth-loss True`` to enable
         DN-Splatter-style monocular depth supervision. Requires depth/
         directory in the dataset.
+    cull_alpha_thresh:
+        Prune Gaussians with opacity below this value. Higher = more
+        aggressive pruning of floaters. Default raised from 0.005 → 0.01.
+    densify_grad_thresh:
+        Spawn new Gaussians when the view-space gradient exceeds this.
+        Lower = more Gaussians in fine-detail regions. Default lowered
+        from 0.0002 → 0.0001.
+    densify_until_iter:
+        Stop densification after this iteration. Extended from 15 000 →
+        20 000 to allow more densification passes on orbital captures.
     """
 
     max_num_iterations: int = ITER_QUALITY
     output_dir: Path = field(default_factory=lambda: Path("outputs"))
     experiment_name: str = "room_reconstruction"
     use_depth_prior: bool = False
+    cull_alpha_thresh: float = 0.01
+    densify_grad_thresh: float = 0.0001
+    densify_until_iter: int = 20_000
 
 
 class GaussianTrainer:
@@ -148,12 +161,17 @@ class GaussianTrainer:
             "--output-dir", str(cfg.output_dir),
             "--experiment-name", cfg.experiment_name,
             "--max-num-iterations", str(cfg.max_num_iterations),
-            "nerfstudio-data",             # data parser sub-command
+            "--pipeline.model.cull-alpha-thresh", str(cfg.cull_alpha_thresh),
+            "--pipeline.model.densify-grad-thresh", str(cfg.densify_grad_thresh),
+            "--pipeline.model.densify-until-iter", str(cfg.densify_until_iter),
         ]
 
         if cfg.use_depth_prior:
             # DN-Splatter depth supervision flag
             cmd += ["--pipeline.model.use-depth-loss", "True"]
+
+        # Data parser sub-command must come last
+        cmd += ["nerfstudio-data"]
 
         return cmd
 

@@ -96,14 +96,26 @@ def backproject_depth(
     """
     dh, dw = depth.shape
 
+    # ── Edge-aware flying-pixel mask ──────────────────────────────────────────
+    # Pixels at depth discontinuities (object edges) have neighbours with very
+    # different depth values.  These "flying pixels" back-project to mid-air
+    # positions and are the primary cause of floater artefacts in the init PLY.
+    # We exclude pixels where the relative depth gradient exceeds a threshold.
+    grad_x = np.zeros_like(depth)
+    grad_y = np.zeros_like(depth)
+    grad_x[:, :-1] = np.abs(depth[:, 1:] - depth[:, :-1]) / (depth[:, :-1] + 1e-6)
+    grad_y[:-1, :] = np.abs(depth[1:, :] - depth[:-1, :]) / (depth[:-1, :] + 1e-6)
+    edge_mask = (np.maximum(grad_x, grad_y) < 0.1)  # keep smooth regions only
+
     us = np.arange(0, dw, stride, dtype=np.float32)
     vs = np.arange(0, dh, stride, dtype=np.float32)
     ug, vg = np.meshgrid(us, vs)
     ug = ug.ravel()
     vg = vg.ravel()
 
-    d = depth[vg.astype(np.int32), ug.astype(np.int32)]
-    valid = d > 1e-6
+    ui, vi = ug.astype(np.int32), vg.astype(np.int32)
+    d = depth[vi, ui]
+    valid = (d > 1e-6) & edge_mask[vi, ui]
     ug, vg, d = ug[valid], vg[valid], d[valid]
 
     # Scale pixel coords to the intrinsics resolution

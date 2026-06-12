@@ -44,6 +44,8 @@ MAX_FRAMES=300
 BLUR_THRESHOLD=80.0
 MIN_FRAME_GAP=250
 USE_ADAPTIVE=true      # auto-tune blur/gap thresholds from video statistics
+USE_DENSE_INIT=true    # replace sparse COLMAP PLY with edge-filtered depth back-projection
+DENSE_INIT_POINTS=150000  # target Gaussian count for dense init (150k is safer than 300k)
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -60,6 +62,8 @@ while [[ $# -gt 0 ]]; do
         --blur-threshold)  BLUR_THRESHOLD="$2"; USE_ADAPTIVE=false; shift 2 ;;
         --min-frame-gap)   MIN_FRAME_GAP="$2";  USE_ADAPTIVE=false; shift 2 ;;
         --no-adaptive)     USE_ADAPTIVE=false;  shift   ;;
+        --no-dense-init)   USE_DENSE_INIT=false; shift  ;;
+        --dense-init-points) DENSE_INIT_POINTS="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -148,6 +152,8 @@ EOF
 fi
 
 # ── Step 3a (optional): Depth prior ──────────────────────────────────────────
+# Note: depth maps are predicted BEFORE dense_init so the PLY can use them.
+# If auto-detect enabled depth, predict now; dense_init runs after (step 2b).
 if [[ "$USE_DEPTH" == "true" ]]; then
     echo ""
     echo "[3a/5] Predicting depth maps (Depth Anything V2)..."
@@ -163,6 +169,18 @@ db = DatasetBuilder(Path("$OUTPUT"))
 db.attach_depth_maps(Path("$OUTPUT") / "depth_raw")
 print("Depth maps attached to dataset.")
 EOF
+fi
+
+# ── Step 3b: Dense point cloud init from depth maps ──────────────────────────
+# Must run AFTER depth prediction (step 3a) so depth_raw/ exists.
+# Replaces sparse COLMAP PLY with edge-filtered depth back-projection.
+# Flying pixels are removed via depth-gradient edge mask in dense_init.py.
+if [[ "$USE_DENSE_INIT" == "true" && -d "$OUTPUT/depth_raw" ]]; then
+    echo ""
+    echo "[3b/5] Building dense init point cloud (edge-filtered depth)..."
+    python scripts/dense_init.py --output-dir "$OUTPUT" --target-points $DENSE_INIT_POINTS --stride 16
+elif [[ "$USE_DENSE_INIT" == "true" ]]; then
+    echo "  [SKIP] dense_init: depth_raw/ not found — enable --depth to generate"
 fi
 
 # ── Step 3: Gaussian Splatting training ───────────────────────────────────────

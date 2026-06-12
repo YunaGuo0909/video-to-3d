@@ -280,8 +280,11 @@ class PoseEstimator:
         )
 
         # ── Step 2: Feature matching ──────────────────────────────────────────
-        logger.info("Matching features (exhaustive)...")
-        pycolmap.match_exhaustive(database_path=str(database_path))
+        # Sequential matching is designed for ordered video frames and runs in
+        # O(n) time vs O(n²) for exhaustive. It also produces better results
+        # for video because it exploits the temporal ordering of frames.
+        logger.info("Matching features (sequential — optimised for video)...")
+        pycolmap.match_sequential(database_path=str(database_path))
 
         # ── Step 3: Incremental mapping ───────────────────────────────────────
         logger.info("Running incremental mapping...")

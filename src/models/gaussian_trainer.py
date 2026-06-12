@@ -28,21 +28,26 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-@functools.lru_cache(maxsize=1)
-def _probe_splatfacto_flags() -> frozenset:
-    """Return all --flag strings found in 'ns-train splatfacto --help'.
+@functools.lru_cache(maxsize=4)
+def _probe_method_flags(method: str) -> frozenset:
+    """Return all --flag strings found in 'ns-train <method> --help'.
 
-    Result is cached so the subprocess runs at most once per process.
-    Falls back to an empty set if ns-train is unavailable or times out.
+    Cached per method (up to 4) so the subprocess runs at most once per
+    process per method.  Falls back to an empty set on any error.
     """
     try:
         result = subprocess.run(
-            ["ns-train", "splatfacto", "--help"],
+            ["ns-train", method, "--help"],
             capture_output=True, text=True, timeout=30,
         )
         return frozenset(re.findall(r"--[\w.-]+", result.stdout + result.stderr))
     except Exception:
         return frozenset()
+
+
+def _probe_splatfacto_flags() -> frozenset:
+    """Convenience wrapper — probes splatfacto flags."""
+    return _probe_method_flags("splatfacto")
 
 
 # nerfstudio splatfacto default training iterations.
@@ -177,33 +182,37 @@ class GaussianTrainer:
             "--max-num-iterations", str(cfg.max_num_iterations),
         ]
 
-        supported = _probe_splatfacto_flags()
+        if cfg.use_dn_splatter:
+            # dn-splatter activates depth supervision automatically when
+            # transforms.json contains depth_file_path entries — no extra flag.
+            # Probe dn-splatter's own flags for optional quality settings.
+            supported = _probe_method_flags("dn-splatter")
+        else:
+            supported = _probe_splatfacto_flags()
 
         scale_flag = "--pipeline.model.use-scale-regularization"
         if cfg.use_scale_regularization:
             if not supported or scale_flag in supported:
                 cmd += [scale_flag, "True"]
             else:
-                logger.warning("%s not in this nerfstudio version — skipping.", scale_flag)
+                logger.warning("%s not available in this method — skipping.", scale_flag)
 
         cull_flag = "--pipeline.model.cull-alpha-thresh"
         if not supported or cull_flag in supported:
             cmd += [cull_flag, str(cfg.cull_alpha_thresh)]
         else:
-            logger.warning("%s not in this nerfstudio version — skipping.", cull_flag)
+            logger.warning("%s not available — skipping.", cull_flag)
 
-        if cfg.use_depth_prior:
-            # Depth supervision requires the dn-splatter nerfstudio plugin.
-            # Standard splatfacto does not expose a depth-loss flag.
-            # Check if the plugin method is available; warn and skip if not.
+        if cfg.use_depth_prior and not cfg.use_dn_splatter:
+            # Only pass explicit depth-loss flag for splatfacto fallback path.
+            # dn-splatter reads depth_file_path from transforms.json directly.
             depth_flag = "--pipeline.model.use-depth-loss"
             if not supported or depth_flag in supported:
                 cmd += [depth_flag, "True"]
             else:
                 logger.warning(
-                    "Depth prior requested but %s is not available in this "
-                    "nerfstudio installation. Install dn-splatter plugin or "
-                    "use 'ns-train dn-splatter' instead. Skipping depth loss.",
+                    "Depth prior requested but %s not available — "
+                    "use dn-splatter for depth supervision.",
                     depth_flag,
                 )
 

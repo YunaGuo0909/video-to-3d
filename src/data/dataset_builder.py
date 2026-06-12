@@ -121,10 +121,11 @@ class DatasetBuilder:
         return stats
 
     def attach_depth_maps(self, depth_dir: Path | str) -> None:
-        """Copy depth maps from *depth_dir* into the dataset depth/ directory.
+        """Copy depth maps from *depth_dir* into the dataset depth/ directory
+        and update transforms.json with ``depth_file_path`` for each frame.
 
-        This is called after DepthPrior.predict() to make depth priors
-        available to the splatfacto trainer (via DN-Splatter integration).
+        The ``depth_file_path`` field is required by dn-splatter so it can
+        load per-frame depth supervision during training.
 
         Parameters
         ----------
@@ -144,6 +145,32 @@ class DatasetBuilder:
             shutil.copy2(src, dest / src.name)
 
         logger.info("Attached %d depth maps to dataset.", len(depth_files))
+
+        # ── Update transforms.json with depth_file_path per frame ────────────
+        # dn-splatter reads this field to locate per-frame depth supervision.
+        transforms_path = self.output_dir / "transforms.json"
+        if not transforms_path.exists():
+            logger.warning("transforms.json not found — skipping depth_file_path injection")
+            return
+
+        with open(transforms_path) as f:
+            data = json.load(f)
+
+        depth_index = {f.stem: f"depth/{f.name}" for f in sorted(dest.glob("*.npy"))}
+        updated = 0
+        for frame in data.get("frames", []):
+            stem = Path(frame["file_path"]).stem
+            if stem in depth_index:
+                frame["depth_file_path"] = depth_index[stem]
+                updated += 1
+
+        with open(transforms_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+        logger.info(
+            "Injected depth_file_path into %d / %d frames in transforms.json.",
+            updated, len(data.get("frames", [])),
+        )
 
     # ── Scene analysis helpers ────────────────────────────────────────────────
 

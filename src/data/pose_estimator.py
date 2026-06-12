@@ -280,11 +280,22 @@ class PoseEstimator:
         )
 
         # ── Step 2: Feature matching ──────────────────────────────────────────
-        # Sequential matching is designed for ordered video frames and runs in
-        # O(n) time vs O(n²) for exhaustive. It also produces better results
-        # for video because it exploits the temporal ordering of frames.
-        logger.info("Matching features (sequential — optimised for video)...")
-        pycolmap.match_sequential(database_path=str(database_path))
+        # Sequential matching exploits video temporal ordering: O(n) time vs
+        # O(n²) for exhaustive.  overlap=20 means each frame is matched against
+        # its 20 nearest neighbours in time (~0.7 s at 30 fps), which handles
+        # typical indoor camera movement without missing loop-closures.
+        logger.info("Matching features (sequential, overlap=20)...")
+        try:
+            options = pycolmap.SequentialMatchingOptions()
+            options.overlap = 20
+            options.loop_detection = False
+            pycolmap.match_sequential(
+                database_path=str(database_path), options=options
+            )
+        except (AttributeError, TypeError):
+            # Older pycolmap versions pass options as a dict or positional arg
+            logger.warning("SequentialMatchingOptions not available — using default overlap")
+            pycolmap.match_sequential(database_path=str(database_path))
 
         # ── Step 3: Incremental mapping ───────────────────────────────────────
         logger.info("Running incremental mapping...")

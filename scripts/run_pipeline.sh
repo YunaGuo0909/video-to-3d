@@ -46,6 +46,8 @@ MIN_FRAME_GAP=250
 USE_ADAPTIVE=true      # auto-tune blur/gap thresholds from video statistics
 USE_DENSE_INIT=true    # replace sparse COLMAP PLY with edge-filtered depth back-projection
 DENSE_INIT_POINTS=150000  # target Gaussian count for dense init (150k is safer than 300k)
+# Auto-detect dn-splatter: if registered in nerfstudio, use it when depth is available
+DN_SPLATTER_AVAILABLE=$(ns-train --help 2>&1 | grep -c "dn-splatter" || echo 0)
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -197,10 +199,19 @@ python - <<EOF
 from pathlib import Path
 from src.models.gaussian_trainer import GaussianTrainer, TrainingConfig
 
+use_depth = $([[ "$USE_DEPTH" == "true" ]] && echo "True" || echo "False")
+use_dn = use_depth and $DN_SPLATTER_AVAILABLE > 0
+
+if use_dn:
+    print("dn-splatter detected and depth available — using dn-splatter for depth supervision")
+else:
+    print(f"Using splatfacto (depth={use_depth}, dn-splatter={'available' if $DN_SPLATTER_AVAILABLE > 0 else 'not found'})")
+
 cfg = TrainingConfig(
     max_num_iterations=$MAX_ITERS,
     output_dir=Path("$OUTPUT") / "nerfstudio",
-    use_depth_prior=$([[ "$USE_DEPTH" == "true" ]] && echo "True" || echo "False"),
+    use_depth_prior=use_depth,
+    use_dn_splatter=use_dn,
 )
 trainer = GaussianTrainer(cfg)
 exp_dir = trainer.train(Path("$OUTPUT"))

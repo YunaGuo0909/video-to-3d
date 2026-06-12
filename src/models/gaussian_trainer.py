@@ -75,6 +75,7 @@ class TrainingConfig:
     output_dir: Path = field(default_factory=lambda: Path("outputs"))
     experiment_name: str = "room_reconstruction"
     use_depth_prior: bool = False
+    use_dn_splatter: bool = False           # use ns-train dn-splatter instead of splatfacto
     use_scale_regularization: bool = True   # penalise needle-shaped Gaussians
     cull_alpha_thresh: float = 0.05         # prune near-transparent floaters
 
@@ -167,8 +168,9 @@ class GaussianTrainer:
 
     def _build_command(self, dataset_dir: Path) -> list[str]:
         cfg = self.config
+        method = "dn-splatter" if cfg.use_dn_splatter else "splatfacto"
         cmd = [
-            "ns-train", "splatfacto",
+            "ns-train", method,
             "--data", str(dataset_dir),
             "--output-dir", str(cfg.output_dir),
             "--experiment-name", cfg.experiment_name,

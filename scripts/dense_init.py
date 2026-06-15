@@ -328,13 +328,20 @@ def main() -> None:
     # ── Write PLY ─────────────────────────────────────────────────────────────
     from plyfile import PlyData, PlyElement
 
+    # Include RGB fields so dataparsers that call _load_3D_points (e.g. dn-splatter's
+    # normal_nerfstudio parser) can read colors without returning an empty tensor.
+    # Gray (128, 128, 128) is a safe placeholder; actual colors are not used by 3DGS.
     verts = np.empty(
         len(pts),
-        dtype=[("x", "f4"), ("y", "f4"), ("z", "f4")],
+        dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"),
+               ("red", "u1"), ("green", "u1"), ("blue", "u1")],
     )
     verts["x"] = pts[:, 0]
     verts["y"] = pts[:, 1]
     verts["z"] = pts[:, 2]
+    verts["red"]   = 128
+    verts["green"] = 128
+    verts["blue"]  = 128
 
     # Back up original sparse PLY before overwriting
     backup_ply = output_dir / "sparse_pt_cloud_colmap.ply"

@@ -85,6 +85,7 @@ class TrainingConfig:
     cull_alpha_thresh: float = 0.05         # prune near-transparent floaters
     stop_split_at: int = 10_000            # stop densification early (default 15k causes late needles)
     densify_grad_thresh: float = 0.0004    # less aggressive densification (default 0.0002 too high)
+    camera_res_scale_factor: float = 0.5   # downscale training images (0.5 = half res, 4x less tile memory)
 
 
 class GaussianTrainer:
@@ -238,6 +239,13 @@ class GaussianTrainer:
                     "use dn-splatter for depth supervision.",
                     depth_flag,
                 )
+
+        # Downscale training images to reduce tile-rasterization VRAM.
+        # dn-splatter OOMs on 16 GB at full res with a dense init PLY.
+        # camera-res-scale-factor is a datamanager flag → must come before dataparser.
+        if cfg.camera_res_scale_factor != 1.0:
+            cmd += ["--pipeline.datamanager.camera-res-scale-factor",
+                    str(cfg.camera_res_scale_factor)]
 
         # Data parser sub-command must come last.
         # dn-splatter requires its own normal-nerfstudio dataparser to load

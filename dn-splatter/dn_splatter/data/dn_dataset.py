@@ -108,7 +108,7 @@ class GDataset(InputDataset):
             )
             quit()
 
-        if self.load_normals:
+        if self.load_normals and self.metadata.get("normal_filenames"):
             assert "normal_filenames" in self.metadata
             self.normal_filenames = self.metadata["normal_filenames"]
 
@@ -164,7 +164,7 @@ class GDataset(InputDataset):
                 )
                 depth_data.update({"mono_depth": mono_image})
 
-        if self.load_normals:
+        if self.load_normals and hasattr(self, "normal_filenames") and self.normal_filenames:
             assert self.normal_filenames is not None
             filepath = self.normal_filenames[data["image_idx"]]
             camtoworld = None

@@ -120,7 +120,7 @@ class DNSplatterDataManager(FullImageDatamanager):
                         antialias=None,
                     ).permute(1, 2, 0)
 
-        if self.load_normals:
+        if self.load_normals and "normal" in data:
             assert "normal" in data
             data["normal"] = data["normal"].to(self.device)
             if data["normal"].shape != data["image"].shape:

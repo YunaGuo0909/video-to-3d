@@ -86,6 +86,7 @@ class TrainingConfig:
     stop_split_at: int = 10_000            # stop densification early (default 15k causes late needles)
     densify_grad_thresh: float = 0.0004    # less aggressive densification (default 0.0002 too high)
     camera_res_scale_factor: float = 0.5   # downscale training images (0.5 = half res, 4x less tile memory)
+    depth_lambda: float = 0.2              # weight for depth loss (dn-splatter requires > 0 when use_depth_loss=True)
 
 
 class GaussianTrainer:
@@ -228,6 +229,8 @@ class GaussianTrainer:
                 cmd += [depth_flag, "True"]
             else:
                 logger.warning("%s not available in dn-splatter — depth supervision disabled.", depth_flag)
+            # depth_lambda must be > 0 when use_depth_loss=True (asserted in dn_model.py)
+            cmd += ["--pipeline.model.depth-lambda", str(cfg.depth_lambda)]
         elif cfg.use_depth_prior:
             # splatfacto fallback: depth-loss flag (may not be available)
             depth_flag = "--pipeline.model.use-depth-loss"

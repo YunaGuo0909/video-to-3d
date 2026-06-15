@@ -203,9 +203,18 @@ class GaussianTrainer:
         else:
             logger.warning("%s not available — skipping.", cull_flag)
 
-        if cfg.use_depth_prior and not cfg.use_dn_splatter:
-            # Only pass explicit depth-loss flag for splatfacto fallback path.
-            # dn-splatter reads depth_file_path from transforms.json directly.
+        if cfg.use_dn_splatter:
+            # dn-splatter requires --pipeline.model.use-depth-loss True to
+            # activate depth supervision and the normal-nerfstudio dataparser
+            # which properly loads depth_file_path into the training batch.
+            # The standard nerfstudio-data dataparser does NOT load depth.
+            depth_flag = "--pipeline.model.use-depth-loss"
+            if not supported or depth_flag in supported:
+                cmd += [depth_flag, "True"]
+            else:
+                logger.warning("%s not available in dn-splatter — depth supervision disabled.", depth_flag)
+        elif cfg.use_depth_prior:
+            # splatfacto fallback: depth-loss flag (may not be available)
             depth_flag = "--pipeline.model.use-depth-loss"
             if not supported or depth_flag in supported:
                 cmd += [depth_flag, "True"]
@@ -216,8 +225,11 @@ class GaussianTrainer:
                     depth_flag,
                 )
 
-        # Data parser sub-command must come last
-        cmd += ["nerfstudio-data"]
+        # Data parser sub-command must come last.
+        # dn-splatter requires its own normal-nerfstudio dataparser to load
+        # depth maps from transforms.json into the training batch.
+        dataparser = "normal-nerfstudio" if cfg.use_dn_splatter else "nerfstudio-data"
+        cmd += [dataparser]
 
         return cmd
 

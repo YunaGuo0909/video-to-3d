@@ -83,6 +83,8 @@ class TrainingConfig:
     use_dn_splatter: bool = False           # use ns-train dn-splatter instead of splatfacto
     use_scale_regularization: bool = True   # penalise needle-shaped Gaussians
     cull_alpha_thresh: float = 0.05         # prune near-transparent floaters
+    stop_split_at: int = 10_000            # stop densification early (default 15k causes late needles)
+    densify_grad_thresh: float = 0.0004    # less aggressive densification (default 0.0002 too high)
 
 
 class GaussianTrainer:
@@ -203,6 +205,18 @@ class GaussianTrainer:
         else:
             logger.warning("%s not available — skipping.", cull_flag)
 
+        stop_flag = "--pipeline.model.stop-split-at"
+        if not supported or stop_flag in supported:
+            cmd += [stop_flag, str(cfg.stop_split_at)]
+        else:
+            logger.warning("%s not available — skipping.", stop_flag)
+
+        densify_flag = "--pipeline.model.densify-grad-thresh"
+        if not supported or densify_flag in supported:
+            cmd += [densify_flag, str(cfg.densify_grad_thresh)]
+        else:
+            logger.warning("%s not available — skipping.", densify_flag)
+
         if cfg.use_dn_splatter:
             # dn-splatter requires --pipeline.model.use-depth-loss True to
             # activate depth supervision and the normal-nerfstudio dataparser
@@ -244,7 +258,8 @@ class GaussianTrainer:
 
     def _find_output_dir(self) -> Path:
         """Locate the most recent nerfstudio experiment directory."""
-        base = self.config.output_dir / self.config.experiment_name / "splatfacto"
+        method = "dn-splatter" if self.config.use_dn_splatter else "splatfacto"
+        base = self.config.output_dir / self.config.experiment_name / method
         if not base.exists():
             return base  # Return expected path even if not yet created
         # nerfstudio appends a timestamp sub-folder; pick the latest.

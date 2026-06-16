@@ -70,6 +70,8 @@ def backproject_depth(
     img_w: int,
     img_h: int,
     stride: int = 16,
+    k1: float = 0.0,
+    k2: float = 0.0,
 ) -> np.ndarray:
     """Back-project a depth map to 3D world points.
 
@@ -122,9 +124,24 @@ def backproject_depth(
     u_img = ug * img_w / dw
     v_img = vg * img_h / dh
 
+    # Normalized distorted coordinates
+    x_d = (u_img - cx) / fl_x
+    y_d = (v_img - cy) / fl_y
+
+    # Undistort if lens has radial distortion (iterative Newton for accuracy)
+    if abs(k1) > 1e-8 or abs(k2) > 1e-8:
+        x_u, y_u = x_d.copy(), y_d.copy()
+        for _ in range(5):  # Newton iterations converge in 3-5 steps
+            r2 = x_u * x_u + y_u * y_u
+            radial = 1.0 + k1 * r2 + k2 * r2 * r2
+            x_u = x_d / radial
+            y_u = y_d / radial
+    else:
+        x_u, y_u = x_d, y_d
+
     # Back-project in OpenCV camera space (Z forward, Y down)
-    x_cv = (u_img - cx) / fl_x * d
-    y_cv = (v_img - cy) / fl_y * d
+    x_cv = x_u * d
+    y_cv = y_u * d
     z_cv = d
 
     # OpenCV → nerfstudio OpenGL camera space (flip Y and Z)
@@ -189,6 +206,8 @@ def estimate_scale(
         fl_y = float(frame.get("fl_y") or transforms.get("fl_y", fl_x))
         cx   = float(frame.get("cx")  or transforms.get("cx", img_w / 2.0))
         cy   = float(frame.get("cy")  or transforms.get("cy", img_h / 2.0))
+        k1_  = float(frame.get("k1")  or transforms.get("k1", 0.0))
+        k2_  = float(frame.get("k2")  or transforms.get("k2", 0.0))
 
         # Transform sparse points to OpenGL camera space
         pts_h = np.hstack([pts, np.ones((len(pts), 1))])
@@ -211,8 +230,16 @@ def estimate_scale(
         z_cv = z_cv[in_front]
         depth_c = depth_colmap[in_front]
 
-        u_img = cx + fl_x * x_cv / z_cv
-        v_img = cy + fl_y * y_cv / z_cv
+        # Project to pixel coords (apply radial distortion if present)
+        x_norm = x_cv / z_cv
+        y_norm = y_cv / z_cv
+        if abs(k1_) > 1e-8 or abs(k2_) > 1e-8:
+            r2 = x_norm * x_norm + y_norm * y_norm
+            radial = 1.0 + k1_ * r2 + k2_ * r2 * r2
+            x_norm = x_norm * radial
+            y_norm = y_norm * radial
+        u_img = cx + fl_x * x_norm
+        v_img = cy + fl_y * y_norm
 
         # Map to depth-map pixel coords
         u_dm = (u_img * dw / img_w).astype(int)
@@ -302,8 +329,10 @@ def main() -> None:
         fl_y   = float(frame.get("fl_y") or transforms.get("fl_y", fl_x))
         cx     = float(frame.get("cx")  or transforms.get("cx", img_w / 2.0))
         cy     = float(frame.get("cy")  or transforms.get("cy", img_h / 2.0))
+        k1     = float(frame.get("k1")  or transforms.get("k1", 0.0))
+        k2     = float(frame.get("k2")  or transforms.get("k2", 0.0))
 
-        pts = backproject_depth(depth, c2w, fl_x, fl_y, cx, cy, img_w, img_h, args.stride)
+        pts = backproject_depth(depth, c2w, fl_x, fl_y, cx, cy, img_w, img_h, args.stride, k1, k2)
         all_pts.append(pts)
 
     if not all_pts:

@@ -403,7 +403,7 @@ class PoseEstimator:
             # COLMAP OpenCV (Y↓,Z→) → nerfstudio OpenGL (Y↑,Z←)
             c2w[:3, 1:3] *= -1
 
-            fl_x, fl_y, cx, cy = self._intrinsics_from_params(cam["model"], cam["params"], cam["w"], cam["h"])
+            fl_x, fl_y, cx, cy, k1, k2, p1, p2 = self._intrinsics_from_params(cam["model"], cam["params"], cam["w"], cam["h"])
 
             frames.append({
                 "file_path": f"images/{name}",
@@ -412,6 +412,10 @@ class PoseEstimator:
                 "fl_y": fl_y,
                 "cx": cx,
                 "cy": cy,
+                "k1": k1,
+                "k2": k2,
+                "p1": p1,
+                "p2": p2,
             })
 
         if not frames:
@@ -419,7 +423,7 @@ class PoseEstimator:
 
         # Shared intrinsics from first camera
         first_cam = cameras[min(cameras.keys())]
-        fl_x0, fl_y0, cx0, cy0 = self._intrinsics_from_params(
+        fl_x0, fl_y0, cx0, cy0, k1_0, k2_0, p1_0, p2_0 = self._intrinsics_from_params(
             first_cam["model"], first_cam["params"], first_cam["w"], first_cam["h"]
         )
 
@@ -427,6 +431,8 @@ class PoseEstimator:
             "camera_model": "OPENCV",
             "fl_x": fl_x0, "fl_y": fl_y0,
             "cx": cx0, "cy": cy0,
+            "k1": k1_0, "k2": k2_0,
+            "p1": p1_0, "p2": p2_0,
             "w": first_cam["w"], "h": first_cam["h"],
             "frames": frames,
         }
@@ -440,20 +446,26 @@ class PoseEstimator:
 
     @staticmethod
     def _intrinsics_from_params(model: str, p: list, w: int, h: int) -> tuple:
-        """Return (fl_x, fl_y, cx, cy) from COLMAP camera params."""
+        """Return (fl_x, fl_y, cx, cy, k1, k2, p1, p2) from COLMAP camera params.
+
+        Distortion coefficients are passed through so nerfstudio can undistort
+        training images on-the-fly.  Omitting them causes nerfstudio to assume
+        zero distortion, which misaligns Gaussian positions for phone cameras
+        with typical barrel distortion (k1 ≈ -0.1 to -0.2).
+        """
         m = model.upper()
         if "SIMPLE_PINHOLE" in m:   # f cx cy
-            return p[0], p[0], p[1], p[2]
+            return p[0], p[0], p[1], p[2], 0.0, 0.0, 0.0, 0.0
         if "PINHOLE" in m:          # fx fy cx cy
-            return p[0], p[1], p[2], p[3]
+            return p[0], p[1], p[2], p[3], 0.0, 0.0, 0.0, 0.0
         if "SIMPLE_RADIAL" in m:    # f cx cy k
-            return p[0], p[0], p[1], p[2]
+            return p[0], p[0], p[1], p[2], p[3], 0.0, 0.0, 0.0
         if "RADIAL" in m:           # f cx cy k1 k2
-            return p[0], p[0], p[1], p[2]
+            return p[0], p[0], p[1], p[2], p[3], p[4], 0.0, 0.0
         if "OPENCV" in m:           # fx fy cx cy k1 k2 p1 p2
-            return p[0], p[1], p[2], p[3]
-        # Fallback: assume f cx cy
-        return p[0], p[0], w / 2.0, h / 2.0
+            return p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]
+        # Fallback: assume f cx cy, no distortion
+        return p[0], p[0], w / 2.0, h / 2.0, 0.0, 0.0, 0.0, 0.0
 
     @staticmethod
     def _export_sparse_ply(reconstruction, ply_path: Path) -> None:
